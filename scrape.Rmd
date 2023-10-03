@@ -1,0 +1,212 @@
+---
+title: "scrape"
+author: "Aleksander Wael"
+date: "05/10/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse, rvest, XML, plyr, miscTools, berryFunctions)
+```
+
+# SCRAPE 250 IMDB MOVIE REVIEWS
+- df with title, genre tags, review in singular words, 25 reviews per title
+
+```{r}
+############# ALL MAIN URL'S FOR THE DRUGS #############
+
+all_main_url <- data.frame("Substances" = c("ALL_url",
+                                            "dmt_url",
+                                            "ayahuasca_url",
+                                            "lsd_url",
+                                            "psilocybin_url",
+                                            "mescaline_url",
+                                            "twoC_B_url",
+                                            "fivem_DMT_url",
+                                            "fivem_DiPT_url",
+                                            "Cacti_mescaline",
+                                            "twoC_C",
+                                            "twoC_D",
+                                            "twoC_E"),
+                           "URLs" = c("https://www.erowid.org/experiences/exp.cgi?OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=40000",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=18&Max=1000&OldSort=SA&Start=0&ShowViews=0&Cellar=0",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=8&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=1000",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=2&Max=3500&OldSort=SA&Start=0&ShowViews=0&Cellar=0",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=39&Max=3500&OldSort=SA&Start=0&ShowViews=0&Cellar=0",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=36&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=1000",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=52&Max=1000&OldSort=SA&Start=0&ShowViews=0&Cellar=0",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=58&Max=1000&OldSort=SA&Start=0&ShowViews=0&Cellar=0",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=57&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=3500",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=809&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=3500",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=262&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=3500",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=103&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=3500",
+                                      "https://www.erowid.org/experiences/exp.cgi?S1=137&OldSort=SA&Start=0&ShowViews=0&Cellar=0&Max=3500")
+                           )
+```
+
+
+```{r}
+###### MAIN SITE FOR EXPERIENCE VAULT FOR A GIVEN DRUG #######
+get_report_info <- function(main_url) { #TAKES A MAIN URL FOR A GIVEN DRUG
+  
+  ## Titles
+  title <- main_url %>% 
+    read_html() %>% 
+    html_nodes("#results-form a") %>% # What goes in the function is the CSS element, this is titles corresponding to each trip report
+    html_text()
+  
+  print("INFO: Titles collected")
+  
+  ## Substance
+  substance <- main_url %>% 
+    read_html() %>% 
+    html_nodes("#results-form td:nth-child(4)") %>% # The substance info 
+    html_text()
+  
+  print("INFO: Substance collected")
+  
+  ## Links
+  link <- main_url %>% 
+    read_html() %>% 
+    html_nodes("#results-form a") %>% # The link attribute after "https://www.erowid.org/experiences/"
+    html_attr("href")
+  
+  print("INFO: Links collected")
+  
+  ## LaTeX links
+  latex_link <- paste0(link, "&format=latex") # If i want the reports as LaTeX, but this is a bad idea i think
+  
+  print("INFO: LaTeX-links collected")
+  
+  ## Create df
+  df <- data.frame(title, substance, link, latex_link)
+  
+  print("INFO: Assigned to dataframe")
+  
+  return(df)
+}
+```
+
+```{r}
+# GET_INFO FOR ALL 38K TRIP REPORTS #
+erowid_report_info <- get_report_info(all_main_url$URLs[1])
+```
+```{r}
+# Save to csv
+write_csv(erowid_report_info, "erowid_info_no_report.csv")
+```
+
+```{r}
+####### LOOP FOR COMBINING ALL REPORT INFORMATION #######
+all_report_info <- data.frame("title" = 0, "substance" = 0, "link" = 0, "latex_link" = 0)
+
+for (x in all_main_url$URLs){
+  report_info <- get_report_info(x)
+  all_report_info <- rbind(report_info, all_report_info)
+  print(paste("INFO: Done with", x))
+}
+```
+
+
+```{r}
+######### EXCLUDING ALL COMBINATION DRUGS #########
+all_report_info %>% 
+  filter(substance == "DMT" | substance == "Ayahuasca" | substance == "LSD" | substance == "Mushrooms" | substance == "Mescaline" | substance == "2C-B" | substance == "5-MeO-DMT")
+
+count(all_report_info$substance == "DMT") # 693
+count(all_report_info$substance == "Ayahuasca") # 121
+count(all_report_info$substance == "LSD") # 1227
+count(all_report_info$substance == "Mushrooms") # 1131
+count(all_report_info$substance == "Mescaline") # 44
+count(all_report_info$substance == "2C-B") # 223
+count(all_report_info$substance == "5-MeO-DMT") # 269	
+
+```
+
+```{r}
+which("exp.php?ID=107363" == erowid_report_info$link)
+print(paste("INFO: Done with report no.", which("exp.php?ID=107363" == erowid_report_info$link)))
+```
+
+```{r}
+# Read csv to test
+erowid_report_info <- read_csv("erowid_info_no_report.csv")
+
+# Add empty "reports" variable
+erowid_report_info <- erowid_report_info %>% 
+  mutate("report" = NA)
+```
+
+```{r}
+##########  LOOP FOR GETTING TRIP REPORTS ##########
+
+# Setup an empty df
+report_df <- data.frame()
+
+# Loop
+for (x in erowid_report_info$link[1:38781]){
+  
+    report_url <- paste0("https://www.erowid.org/experiences/", x)
+    report <- 1
+    
+    try ({
+      report <- report_url %>% 
+        read_html() %>% 
+        html_nodes(".report-text-surround") %>% 
+        html_text()
+    })
+    
+    if (is_empty(report) == TRUE){
+      current_df <- data.frame("report" = 0)
+      print(paste("INFO: ############### REPORT IS EMPTY. Could not retrieve report from report no.", which(x == erowid_report_info$link)))
+      
+    } else if (report == 1){
+      current_df <- data.frame("report" = 0)
+      print(paste("INFO: ############### ERROR IN READING REPORT. Could not retrieve report from report no.", which(x == erowid_report_info$link)))
+      
+    } else {
+      current_df <- data.frame("report" = report)
+    }
+    
+    report_df <- rbind(report_df, current_df)
+    
+    print(paste("INFO: Done with report no.", which(x == erowid_report_info$link))) # Count reports done
+}
+
+```
+
+```{r}
+# Save to csv
+write_csv(report_df, "trip_reports.csv")
+
+# Read csv to test
+dftest <- read_csv("trip_reports.csv")
+
+dftest %>% 
+  ggplot(aes(genre))+
+  geom_histogram(stat = "count")
+```
+
+```{r}
+########## TEST SECTION ##########
+
+# Import data
+write_csv(joined_df, "trip_reports_complete.csv")
+
+# Finding missing datapoints
+all_report_df$report[7377]
+erowid_report_info$link[27427]
+
+# Trying out Regex for cleaning data
+report_1 <- all_report_df$report[1]
+
+typeof(report_1)
+
+strsplit(report_1, "         \n")
+
+
+report_1 <- report_1 %>% 
+  str_remove("^[^.]*(         \n)") %>% 
+  str_remove("(\\nExp Year)(.|\\n)*")
+```

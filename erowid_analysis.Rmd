@@ -1,0 +1,685 @@
+---
+title: "erowid_analysis"
+author: "Aleksander Wael"
+date: "10/28/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+pacman::p_load(tidyverse, topicmodels, ldatuning, cld3, tidytext, scales, mallet, rJava, caret, openNLP, textdata, ggpubr, LDAvis, textstem, tm, ggwordcloud, wordcloud, wordcloud2, qdapDictionaries)
+```
+
+```{r}
+# Loading data
+df <- read_csv("trip_reports_complete_CLEAN.csv")
+# Remove 0 rows
+df <- df %>% 
+  filter(report != 0)
+
+df$title <- gsub("exp.php\\?ID=", "", df$link)
+df$title <- as.character(df$title)
+```
+Some of the reports are not in English, so I will have to exclude these in the beginning.
+
+```{r}
+# DETECTING LANGUAGE OF REPORTS
+df$language <- detect_language(df$report)
+```
+
+```{r}
+# Subsetting to the drugs i want
+# REMOVING COMBINATION DRUGS
+df <- df %>% 
+  filter(grepl("&", substance) == FALSE) %>% 
+  filter(grepl(", ", substance) == FALSE) %>% 
+  filter(grepl("and", substance) == FALSE) %>% 
+  filter(grepl("/", substance) == FALSE) %>% 
+  filter(grepl(" on", substance) == FALSE) %>% 
+  filter(grepl("after", substance) == FALSE) %>% 
+  filter(grepl("with", substance) == FALSE) %>% 
+  filter(grepl("Cannabis", substance) == FALSE) %>% 
+  filter(grepl("cannabis", substance) == FALSE) %>% 
+  filter(grepl("Sold", substance) == FALSE) %>% 
+  filter(grepl("sold", substance) == FALSE) %>% 
+  filter(grepl(" then", substance) == FALSE) %>% 
+  filter(grepl("Unknown", substance) == FALSE) %>% 
+  filter(grepl("unknown", substance) == FALSE) %>% 
+  filter(language == "en")
+```
+
+```{r}
+# ALL WORDS IN REPORTS AND SUBSTANCE TO LOWER CASE
+df$substance <- tolower(df$substance)
+df$report <- tolower(df$report)
+```
+
+```{r}
+# Creating df for all drugs
+df_dmt <- df %>% 
+  filter(substance == "dmt") %>%
+  #filter(grepl("dmt", substance) == TRUE) %>%
+  #filter(grepl("4-", substance) == FALSE) %>%
+  mutate(substance_core = "DMT")
+unique(df_dmt$substance)
+
+df_aya <- df %>% 
+  filter(grepl("ayahuasca", substance) == TRUE) %>% 
+  mutate(substance_core = "Ayahuasca")
+unique(df_aya$substance)
+
+df_lsd <- df %>% 
+  filter(substance == "lsd") %>%
+  #filter(grepl("lsd", substance) == TRUE) %>% 
+  mutate(substance_core = "LSD")
+unique(df_lsd$substance)
+
+df_shroom <- df %>% 
+  filter(grepl("ushroom", substance) == TRUE) %>% 
+  mutate(substance_core = "Psilocybin_Mushrooms")
+unique(df_shroom$substance)
+
+df_mes <- df %>% 
+  filter(grepl("Cacti", substance) == TRUE |
+           grepl("cacti", substance) == TRUE |
+           grepl("Cactus", substance) == TRUE |
+           grepl("cactus", substance) == TRUE |
+           grepl("Mescaline", substance) == TRUE |
+           grepl("mescaline", substance) == TRUE |
+           grepl("eyote", substance) == TRUE |
+           grepl("Pedro", substance) == TRUE |
+           grepl("pedro", substance) == TRUE) %>% 
+  mutate(substance_core = "Mescaline_Cacti_Synthetic")
+unique(df_mes$substance)
+
+df_2c <- df %>% 
+  filter(substance == "2c-b") %>% 
+  mutate(substance_core = "2C_B")
+unique(df_2c$substance)
+```
+
+```{r}
+# COMBINING TO ONE DF
+df <- rbind(df_dmt, df_aya, df_lsd, df_shroom, df_mes, df_2c)
+
+# Removing LaTex link
+df <- df %>% 
+  select(!latex_link)
+```
+
+```{r}
+# ADDITION TO STOPWORD LIST
+stopword_drugnames <- c(
+  unique(df_dmt$substance),
+  unique(df_aya$substance),
+  unique(df_lsd$substance),
+  unique(df_shroom$substance),
+  unique(df_mes$substance),
+  unique(df_2c$substance)
+)
+
+stopword_drugnames_no_punct <- str_replace_all(stopword_drugnames, "[[:punct:]]", "")
+stopword_drugnames_no_punct <- str_replace_all(stopword_drugnames_no_punct, "[[:digit:]]", "")
+
+# Stopwords for extra drug terminology
+stopword_extras <- c("Dose", "dose", "mg", "dmt", "ayahuasca", "lsd", "Shrooms", "shrooms", "mescaline", "2C", "2c", "acid", "Acid", "yage", "Yage", "hoasca", "Hoasca")
+
+# Stopwords from NLTK forum
+
+stopwords_nltk <- read_delim("https://gist.githubusercontent.com/ZohebAbai/513218c3468130eacff6481f424e4e64/raw/b70776f341a148293ff277afa0d0302c8c38f7e2/gist_stopwords.txt")
+
+stopwords_nltk <- colnames(stopwords_nltk)
+
+# Remove contractions
+data(contractions)
+
+#contractions <- contractions %>% 
+#  select(contraction) %>% 
+#  mutate(contraction = str_replace_all(contraction, "[[:punct:]]", ""))
+
+stopwords <- c(stop_words$word, stopword_drugnames, stopword_drugnames_no_punct, stopword_extras, contractions$contraction, stopwords_nltk)
+stopwords <- as.data.frame(stopwords)
+colnames(stopwords)[1] <- "word"
+
+# Making stopwords lower case
+stopwords$word <- tolower(stopwords$word)
+
+write_csv(stopwords, file= "stopwords.csv")
+```
+
+# LDA topic modeling
+
+```{r}
+# Remove symbols
+#df <- df %>%
+#  mutate(report = str_replace_all(report, "[[:punct:]]", "")) %>% 
+#  mutate(report = str_replace_all(report, "[[:digit:]]", ""))
+
+write_csv(df, file= "df_python.csv")
+
+df_2c <- df %>% 
+  filter(substance_core == "2C_B")
+write_csv(df_2c, file= "df_2c.csv")
+
+df_aya <- df %>% 
+  filter(substance_core == "Ayahuasca")
+write_csv(df_aya, file= "df_aya.csv")
+
+df_dmt <- df %>% 
+  filter(substance_core == "DMT")
+write_csv(df_dmt, file= "df_dmt.csv")
+
+df_lsd <- df %>% 
+  filter(substance_core == "LSD")
+write_csv(df_lsd, file= "df_lsd.csv")
+
+df_mes <- df %>% 
+  filter(substance_core == "Mescaline_Cacti_Synthetic")
+write_csv(df_mes, file= "df_mes.csv")
+
+df_shroom <- df %>% 
+  filter(substance_core == "Psilocybin_Mushrooms")
+write_csv(df_shroom, file= "df_shroom.csv")
+
+#unique(df$substance_core)
+```
+
+```{r}
+# Tokenization (split into words)
+df_word <- df %>%
+  unnest_tokens(word, report)
+```
+
+```{r}
+# REMOVING WORDS THAT START WITH A NUMBER
+df_word <- df_word %>% 
+  filter(grepl("[0-9]", word) == FALSE)
+```
+
+```{r}
+# REMOVE STOPWORDS
+df_word_count <- df_word %>%
+  anti_join(stopwords) %>%
+  count(title, substance_core, word, sort = TRUE) %>%
+  ungroup()
+```
+
+```{r}
+# IN HOW MANY REPORTS DOES EACH WORD OCCUR?
+word_report_freq <- df_word_count %>% 
+  group_by(word) %>% 
+  count()
+```
+
+```{r}
+# REMOVE WORDS THAT OCCUR IN LESS THAN FIVE REPORTS!
+infrequent_words <- word_report_freq %>% 
+  filter(n < 5) %>% 
+  select(word)
+
+df_word_count <- df_word_count %>% 
+  anti_join(infrequent_words)
+
+#unique(df_word_count$word)
+```
+
+```{r}
+# REMOVE REPORTS WITH LESS THAN 20 WORDS
+df_long_reports <- df_word %>%
+  count(title) %>% 
+  filter(n < 20) %>% 
+  select(title)
+
+df_word_count <- df_word_count %>% 
+  anti_join(df_long_reports)
+```
+
+###### df with pure tf counts
+
+```{r}
+df_word_count_substance <- df_word %>% 
+  count(substance_core, word, sort = T) %>% 
+  anti_join(stopwords) %>% 
+  anti_join(infrequent_words)
+
+
+stopwords_frequent <- df_word_count_substance %>% 
+  arrange(desc(n)) %>% 
+  group_by(substance_core) %>%
+  slice(1:6) %>% 
+  group_by(word) %>% 
+  count(word)
+
+stopwords_frequent <- unique(as.vector(stopwords_frequent$word))
+
+stopwords_frequent
+  
+```
+
+###### Create the TF-IDF
+
+```{r}
+df_word_count_tfidf <- df_word_count %>% 
+  bind_tf_idf(word, title, n)
+```
+
+```{r}
+df_word_count_substance_tfidf <- df_word_count %>% 
+  bind_tf_idf(word, substance_core, n)
+```
+```{r}
+#TEST
+
+df_word_count_tfidf %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(substance_core) %>% 
+  top_n(40) %>% 
+  ungroup 
+```
+
+
+```{r}
+set.seed(42)
+wordcloud_plot <- df_word_count_tfidf %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(substance_core) %>% 
+  top_n(40) %>% 
+  ungroup %>%
+  mutate(angle = 90 * sample(c(0, 1), n(), replace = TRUE, prob = c(80, 20))) %>% 
+  ggplot(
+    aes(label = word,
+        size = tf_idf,
+        color = substance_core)) +
+  geom_text_wordcloud_area(eccentricity = 1) +
+  scale_radius(range = c(2,11)) +
+  scale_color_brewer(palette = "Dark2")+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))+
+  facet_wrap(~substance_core, ncol = 3, scales = "fixed") +
+  labs(title = "Most important words per substance",
+       subtitle = "Importance determined by term frequency (tf) - inversed document frequency(idf)")
+
+wordcloud_plot
+
+#ggsave("Wordcloud_tfidf.png", plot = wordcloud_plot, dpi = "print", height = 16, width = 22, units = "cm", type = "cairo", bg = "white")
+```
+
+##### Create document-term-matrix
+
+```{r}
+# Create the document-term-matrix
+df_dtm <- df_word_count %>%
+  cast_dtm(title, word, n)
+```
+
+################## SPLITTING UP DF FOR INDIVIDUAL ANALYSIS ##################
+
+```{r}
+dtm_2c <- df_word_count %>% 
+  filter(substance_core == "2C_B") %>% 
+  cast_dtm(title, word, n)
+
+dtm_aya <- df_word_count %>% 
+  filter(substance_core == "Ayahuasca") %>% 
+  cast_dtm(title, word, n)
+
+dtm_dmt <- df_word_count %>% 
+  filter(substance_core == "DMT") %>% 
+  cast_dtm(title, word, n)
+
+dtm_lsd <- df_word_count %>% 
+  filter(substance_core == "LSD") %>% 
+  cast_dtm(title, word, n)
+
+dtm_shroom <- df_word_count %>% 
+  filter(substance_core == "Psilocybin_Mushrooms") %>% 
+  cast_dtm(title, word, n)
+
+dtm_mes <- df_word_count %>% 
+  filter(substance_core == "Mescaline_Cacti_Synthetic") %>% 
+  cast_dtm(title, word, n)
+```
+
+##### TRAIN THE LDA MODEL
+
+```{r}
+start_time <- Sys.time()
+dtm_2c_lda <- LDA(dtm_2c, k = 5, control = list(seed = 1234)) # 5 or perhaps 15?
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time, "for dtm_2c")
+
+start_time <- Sys.time()
+dtm_aya_lda <- LDA(dtm_aya, k = 12, control = list(seed = 1234)) #12-15 topics
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time, "for dtm_aya")
+
+start_time <- Sys.time()
+dtm_dmt_lda <- LDA(dtm_dmt, k = 6, control = list(seed = 1234)) # 6-14 topics
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time, "for dtm_dmt")
+
+start_time <- Sys.time()
+dtm_lsd_lda <- LDA(dtm_lsd, k = 7, control = list(seed = 1234)) # LSD needs 7 topics (Deveaud, 2014)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time, "for dtm_lsd")
+
+start_time <- Sys.time()
+dtm_shroom_lda <- LDA(dtm_shroom, k = 7, control = list(seed = 1234)) # 7-15 topics
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time, "for dtm_shroom")
+
+start_time <- Sys.time()
+dtm_mes_lda <- LDA(dtm_mes, k = 9, control = list(seed = 1234)) # 9 or 20 topics?
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time, "for dtm_mes")
+```
+
+###### VISUALIZE
+
+```{r}
+# FUNCTION TO CHANGE DTM FORMAT
+topicmodels2LDAvis <- function(x, ...){
+  post <- topicmodels::posterior(x)
+  if (ncol(post[["topics"]]) < 3) stop("The model must contain > 2 topics")
+  mat <- x@wordassignments
+  LDAvis::createJSON(
+    phi = post[["terms"]], 
+    theta = post[["topics"]],
+    vocab = colnames(post[["terms"]]),
+    doc.length = slam::row_sums(mat, na.rm = TRUE),
+    term.frequency = slam::col_sums(mat, na.rm = TRUE)
+  )
+}
+```
+
+```{r}
+serVis(topicmodels2LDAvis(dtm_2c_lda))
+serVis(topicmodels2LDAvis(dtm_aya_lda))
+serVis(topicmodels2LDAvis(dtm_dmt_lda))
+serVis(topicmodels2LDAvis(dtm_lsd_lda))
+serVis(topicmodels2LDAvis(dtm_shroom_lda))
+serVis(topicmodels2LDAvis(dtm_mes_lda))
+```
+
+###### CALCULATE NUMBER OF TOPICS WITH LDATUNING
+
+### 2C
+```{r}
+start_time <- Sys.time()
+result_2c <- FindTopicsNumber(
+  dtm_2c,
+  topics = seq(from = 2, to = 50, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = NA,
+  verbose = TRUE
+)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time)
+```
+
+### Ayahuasca
+```{r}
+start_time <- Sys.time()
+result_aya <- FindTopicsNumber(
+  dtm_aya,
+  topics = seq(from = 2, to = 50, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = NA,
+  verbose = TRUE
+)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time)
+```
+
+
+### DMT
+```{r}
+start_time <- Sys.time()
+result_dmt <- FindTopicsNumber(
+  dtm_dmt,
+  topics = seq(from = 2, to = 50, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = NA,
+  verbose = TRUE
+)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time)
+```
+
+
+### LSD
+```{r}
+start_time <- Sys.time()
+result_lsd <- FindTopicsNumber(
+  dtm_lsd,
+  topics = seq(from = 2, to = 50, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"), #7 topics optimal with Deveaud, 2014
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = NA,
+  verbose = TRUE
+)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time)
+```
+
+### Mushrooms
+```{r}
+start_time <- Sys.time()
+result_shroom <- FindTopicsNumber(
+  dtm_shroom,
+  topics = seq(from = 2, to = 50, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = NA,
+  verbose = TRUE
+)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time)
+```
+
+### Mescaline
+```{r}
+start_time <- Sys.time()
+result_mes <- FindTopicsNumber(
+  dtm_mes,
+  topics = seq(from = 2, to = 50, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = NA,
+  verbose = TRUE
+)
+end_time <- Sys.time()
+paste("Run time was", end_time - start_time)
+```
+
+```{r}
+FindTopicsNumber_plot(result_2c) # 5 (Deveaud), perhaps 15?
+FindTopicsNumber_plot(result_aya) # 12-15 topics?
+FindTopicsNumber_plot(result_dmt) # 6-14 topics
+FindTopicsNumber_plot(result_lsd) # 7 topics
+FindTopicsNumber_plot(result_shroom) # 7-15 topics
+FindTopicsNumber_plot(result_mes) # 9 or 20?
+```
+
+###### BETA VALUES (probability of word being in a topic) #######
+
+```{r}
+dtm_2c_topics <- tidy(dtm_2c_lda, matrix = "beta")
+```
+
+###### TOP WORDS PER TOPIC
+
+```{r}
+top_terms_dtm_2c_topics <- dtm_2c_topics %>%
+  group_by(topic) %>%
+  top_n(50, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+```
+
+###### PLOTTING TOP WORDS PER TOPIC
+
+```{r}
+plot_top_terms_dtm_2c_topics <- top_terms_dtm_2c_topics %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Top terms across topics",
+       x = "Beta-values for topic",
+       y = "Word") +
+  facet_wrap(~ topic, scales = "free", labeller = label_both) +
+  scale_y_reordered() +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_top_terms_dtm_2c_topics
+```
+
+###### REMOVING COMMON WORDS ACROSS TOPICS!
+
+```{r}
+top_terms_six_topics %>% 
+  group_by(term) %>% 
+  count()
+```
+
+###### Beta spread categories - what words divide the categories the most?
+
+###### GAMMA VALUES - per-document-per-topic probabilities, document assignment to a topic #######
+
+```{r}
+# Per document assigned to topic
+gamma_six_topics <- tidy(six_topic_lda, matrix = "gamma")
+
+# Probabilities for each movie in a genre
+gamma_six_topics <- gamma_six_topics %>% 
+  rename(title = document)
+
+# Getting substance (correct topic) in the gamma df
+gamma_six_topics <- df %>% 
+  select(title, substance_core) %>% 
+  inner_join(gamma_six_topics, by = "title")
+```
+
+# Plots for document (review) assigned to topic
+
+```{r}
+# Per genre assigned to topic
+plot_gamma_six_topics <- gamma_six_topics %>%
+  mutate(substance_core = reorder(substance_core, gamma * topic)) %>%
+  ggplot(aes(factor(topic), gamma, fill = factor(topic))) +
+  geom_boxplot() +
+  facet_wrap(~ substance_core) +
+  labs(x = "Topic",
+       y = expression(gamma),
+       title = "Probabilities of report pertaining to topic (substance)") +
+  theme_bw()+
+  theme(legend.position="none",
+        plot.title = element_text(hjust = 0.5))
+
+plot_gamma_six_topics
+
+# SAVE PLOT
+ggsave("Gamma probabilities of report pertaining to topic.png", plot = plot_gamma_six_topics, dpi = "print", height = 16, width = 16, units = "cm", type = "cairo")
+```
+
+###### MAKING CONFUSION MATRIX
+
+```{r}
+# Prepare df for the confusionmatrix
+six_topics_classifications <- gamma_six_topics %>%
+  group_by(substance_core, title) %>%
+  slice_max(gamma) %>%
+  ungroup()
+
+# Prepare df for the confusionmatrix
+substance_topics <- six_topics_classifications %>%
+  count(substance_core, topic) %>%
+  group_by(substance_core) %>%
+  top_n(1, n) %>%
+  ungroup() %>%
+  transmute(consensus = substance_core, topic)
+
+# Join model preditions with actual predictions
+six_topics_pred <- six_topics_classifications %>%
+  inner_join(substance_topics, by = "topic")
+
+##### CONFUSION MATRIX based on review units #####
+
+six_topics_pred$substance_core <- as.factor(six_topics_pred$substance_core)
+six_topics_pred$consensus <- as.factor(six_topics_pred$consensus)
+
+confusionMatrix(six_topics_pred$consensus, six_topics_pred$substance_core)
+
+###### CONFUSION MATRIX plot CONFUSION MATRIX ######
+plot_matrix_review <- six_topics_pred %>%
+  count(substance_core, consensus) %>%
+  mutate(across(c(substance_core, consensus), ~str_wrap(., 20))) %>%
+  group_by(substance_core) %>%
+  mutate(percent = n / sum(n)) %>%
+  ggplot(aes(x = substance_core, y = reorder(consensus, desc(consensus)), fill = percent)) +
+  geom_tile() +
+  scale_fill_gradient2(high = "darkred", label = percent_format()) +
+  geom_text(aes(label = n)) +
+  scale_x_discrete(position = "top") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        panel.grid = element_blank(),
+        plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Actual substance_core",
+       y = "Predicted substance_core",
+       fill = "% of assignments",
+       title = "substance_core predicted by review")
+
+plot_matrix_review
+
+# SAVE PLOT
+#ggsave("Confusion Matrix for reviews.png", plot = plot_matrix_review, dpi = "print", height = 9, width = 16, units = "cm", type = "cairo")
+
+# Mistakes df
+#wrong_reviews <- six_topics_pred %>%
+#  filter(genre != consensus)
+```
+
+###### LDAvis visualization
+
+```{r}
+# FUNCTION TO CHANGE DTM FORMAT
+topicmodels2LDAvis <- function(x, ...){
+  post <- topicmodels::posterior(x)
+  if (ncol(post[["topics"]]) < 3) stop("The model must contain > 2 topics")
+  mat <- x@wordassignments
+  LDAvis::createJSON(
+    phi = post[["terms"]], 
+    theta = post[["topics"]],
+    vocab = colnames(post[["terms"]]),
+    doc.length = slam::row_sums(mat, na.rm = TRUE),
+    term.frequency = slam::col_sums(mat, na.rm = TRUE)
+  )
+}
+```
+
+###### VISUALIZE
+
+```{r}
+serVis(topicmodels2LDAvis(big_topic_lda))
+```
+
+
+
+
+

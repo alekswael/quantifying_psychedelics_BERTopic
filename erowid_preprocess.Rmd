@@ -1,0 +1,104 @@
+---
+title: "erowid_preprocess"
+author: "Aleksander Wael"
+date: "10/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse, stringi)
+```
+
+```{r}
+########## DATA CLEANING ##########
+
+# Import data
+df <- read.csv("trip_reports_complete.csv", encoding = "UTF-8")
+
+# Trying out Regex for cleaning data
+df$report[19]
+df$report[36]
+
+report_test <- data.frame("report" = df$report[50:51])
+
+df$report[44]
+str_remove(df$report[44], "^[^.]*(         \n)")
+str_remove(df$report[44], "(\\nExp Year)(.|\\n)*")
+
+# Converting strings to UTF-8
+for (x in 1:38712){
+  df$report[x] <- stri_enc_toutf8(df$report[x])
+}
+
+stri_enc_detect(df$report[2])
+
+# Using the Regex for the whole dataset
+
+for (x in 1:38781){
+  
+  df$report[x] <- sapply(strsplit(df$report[x], "\nExp Year"), "[", 1)
+  
+  if (grepl("Erowid Note:", df$report[x], fixed = TRUE) == TRUE){ # If EROWID has made a comment on the post - change report to 0.
+    df$report[x] <- "0"
+  }
+  
+  if (grepl("BODY WEIGHT", df$report[x], fixed = TRUE) == TRUE){ # If it contains either DOSE + WEIGHT or only WEIGHT
+    df$report[x] <- sapply(strsplit(df$report[x], "         "), "[", 2)
+  }
+  
+  if (grepl("DOSE", df$report[x], fixed = TRUE) == TRUE){ # If it contains DOSE alone (if it also contained body weight, the previous iteration would have deleted it)
+    df$report[x] <- sapply(strsplit(df$report[x], "\n\t\t\n"), "[", 2)
+  }
+  
+  df$report[x] <- gsub("(\\n)", "", df$report[x])
+  df$report[x] <- gsub("(\\r)", "", df$report[x])
+  #df$report[x] <- gsub("[[:punct:]]", "", df$report[x])
+  df$report[x] <- gsub("[^[:print:]]", "", df$report[x])
+  #df$report[x] <- gsub("[[:digit:]]", "", df$report[x])
+  
+  print(paste("INFO: Done with iteration no.", x))
+}
+
+df <- df %>% 
+  filter(report != 0)
+
+write_csv(df, file= "trip_reports_complete_CLEAN.csv")
+
+df$report[1:20]
+gsub("[^[:print:]]", "", df$report[3])
+
+# Removing all missing reports
+df <- df %>% 
+  filter(report != 0)
+
+
+gsub("(\\n)", "", df$report[x])
+gsub("[[:print:]]", "", df$report[1])
+
+# Testing methods for replacing
+sub("         \n", "", df$report[44])
+strsp
+sapply(strsplit(df$report[44], "         \n"), "[", 2)
+sapply(strsplit(df$report[44], "\nExp Year"), "[", 1)
+strsplit(df$report[44], "\nExp Year")
+
+grepl("BODY WEIGHT:", df$report[38], fixed = TRUE)
+
+
+iconv(df$report[3], from = "UTF-8", to = "UTF-8", sub = "")
+
+##### POST DIFFERENCES
+
+df$report[44] # DOSE and BODY WEIGHT, use pattern "         \n"
+df$report[37] # Only DOSE, no BODY WEIGHT, use pattern "\n\t\t\n"
+df$report[42] # Only BODY WEIGHT, use pattern "         \n"
+df$report[302] # Neither DOSE nor body weight, come up with pattern?
+df$report[19]
+df$report[32]
+df$report[2]
+df$report[85]
+df$report[185]
+
+grepl("BODY WEIGHT", df$report[2], fixed = TRUE)
+```
